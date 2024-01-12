@@ -3,6 +3,8 @@ if exists('g:loaded_lsp_settings') || !exists('*json_encode') || !has('lambda')
 endif
 let g:loaded_lsp_settings= 1
 
+let g:lsp_export_to_path = get(g:, "lsp_export_to_path", 0)
+
 let g:lsp_settings_root_markers = get(g:, 'lsp_settings_root_markers', [
       \ '.git',
       \ '.git/',

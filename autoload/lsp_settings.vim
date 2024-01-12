@@ -1,5 +1,4 @@
 let s:root_dir = expand('<sfile>:h:h')
-let s:settings_dir = s:root_dir . '/settings'
 let s:checkers_dir = s:root_dir . '/checkers'
 let s:installer_dir = s:root_dir . '/installer'
 
@@ -48,7 +47,7 @@ function! lsp_settings#installed_servers() abort
       let l:path = lsp_settings#servers_dir() . '/' . l:conf.command . '/.vim-lsp-settings-version'
       let l:version = ''
       if filereadable(l:path)
-        let l:version = trim(join(readfile(l:path), "\n"))
+        let l:version = trim(join(readfile(l:path), '\n'))
       endif
       call add(l:servers, {'name': l:conf.command, 'version': l:version})
     endfor
@@ -78,22 +77,29 @@ function! lsp_settings#executable(cmd) abort
 endfunction
 
 function! s:vim_lsp_installer(ft, ...) abort
-  let l:ft = tolower(get(split(a:ft, '\.'), 0, ''))
-  let l:ft = empty(l:ft) ? '_' : l:ft
-  if !has_key(s:settings, l:ft)
-    return []
-  endif
-  let l:servers = s:settings[l:ft]
-  if empty(l:servers)
-    return []
-  endif
-  if l:ft !=# '_'
-    let l:servers += s:settings['_']
-  endif
-
   let l:default = get(g:, 'lsp_settings_filetype_' . a:ft, '')
-
   let l:name = get(a:000, 0, '')
+
+	if empty(l:name)
+  	let l:ft = tolower(get(split(a:ft, '\.'), 0, ''))
+  	let l:ft = empty(l:ft) ? '_' : l:ft
+  	if !has_key(s:settings, l:ft)
+  	  return []
+  	endif
+  	let l:servers = s:settings[l:ft]
+  	if empty(l:servers)
+  	  return []
+  	endif
+  	if l:ft !=# '_'
+  	  let l:servers += s:settings['_']
+  	endif
+	else
+		let l:servers = []
+  	for l:ft in sort(keys(s:settings))
+			let l:servers += s:settings[l:ft]
+		endfor
+	endif
+
   for l:conf in l:servers
     if !empty(l:name) && l:conf.command != l:name
       continue
@@ -254,46 +260,6 @@ function! lsp_settings#exec_path(cmd) abort
   return ''
 endfunction
 
-function! lsp_settings#root_path(patterns) abort
-  let l:patterns = extend(copy(a:patterns), g:lsp_settings_root_markers)
-  return lsp#utils#find_nearest_parent_file_directory(lsp#utils#get_buffer_path(), l:patterns)
-endfunction
-
-function! lsp_settings#root_uri(name) abort
-  let l:patterns = lsp_settings#get(a:name, 'root_uri_patterns', [])
-  if empty(l:patterns)
-    for l:ft in sort(keys(s:settings))
-      for l:conf in s:settings[l:ft]
-        if l:conf.command ==# a:name && has_key(l:conf, 'root_uri_patterns')
-          let l:patterns = l:conf['root_uri_patterns']
-          break
-        endif
-      endfor
-    endfor
-  endif
-
-  let l:dir = lsp#utils#find_nearest_parent_file_directory(lsp#utils#get_buffer_path(), extend(copy(l:patterns), g:lsp_settings_root_markers))
-  if empty(l:dir)
-    return lsp#utils#get_default_root_uri()
-  endif
-  return lsp#utils#path_to_uri(l:dir)
-endfunction
-
-function! lsp_settings#autocd(server_info) abort
-  if !has_key(a:server_info, 'root_uri')
-    return
-  endif
-  if type(a:server_info['root_uri']) ==# v:t_func
-    let l:root_uri = a:server_info['root_uri'](a:server_info)
-  else
-    let l:root_uri = a:server_info['root_uri']
-  endif
-  let l:path = lsp#utils#uri_to_path(l:root_uri)
-  if isdirectory(l:path)
-    exe 'cd' l:path
-  endif
-endfunction
-
 function! lsp_settings#settings() abort
   return s:settings
 endfunction
@@ -360,6 +326,12 @@ function! s:vim_lsp_uninstall_server(command) abort
   endif
   call delete(l:server_install_dir, 'rf')
   call lsp_settings#utils#msg('Uninstalled ' . a:command)
+
+	let l:export_to_path = get(g:, 'lsp_export_to_path', 0)
+	if l:export_to_path
+		let l:symlink_path = $HOME . '/bin/' . a:command
+		call system('rm ' . l:symlink_path)
+	endif
 endfunction
 
 " neovim passes third argument as 'exit' while vim passes only 2 arguments
@@ -367,20 +339,30 @@ function! s:vim_lsp_install_server_post(command, job, code, ...) abort
   if a:code != 0
     return
   endif
-  if lsp_settings#executable(a:command)
-    let l:script = printf('%s/%s.vim', s:settings_dir, a:command)
-    if filereadable(l:script)
-      if has('patch-8.1.1113')
-        command! -nargs=1 LspRegisterServer autocmd User lsp_setup ++once call lsp_settings#register_server(<args>)
-      else
-        command! -nargs=1 LspRegisterServer autocmd User lsp_setup call lsp_settings#register_server(<args>)
-      endif
-      exe 'source' l:script
-      delcommand LspRegisterServer
-      doautocmd <nomodeline> User lsp_setup
-    endif
-  endif
   call lsp_settings#utils#msg('Installed ' . a:command)
+
+	let l:export_to_path = get(g:, 'lsp_export_to_path', 0)
+	if l:export_to_path
+		let l:lsp_dir_paths = globpath(lsp_settings#servers_dir(), '*', 1, 1)
+		for l:lsp_dir_path in l:lsp_dir_paths
+			let l:name = fnamemodify(l:lsp_dir_path, ':t')
+
+			if isdirectory(l:lsp_dir_path)
+				let l:lsp_path = l:lsp_dir_path . '/' . l:name
+				if has('win32')
+    			let $PATH .= ';' . l:lsp_path
+				else
+					if !isdirectory($HOME . '/bin')
+						call mkdir($HOME . '/bin')
+					endif
+					if empty(glob($HOME . '/bin/' . l:name))
+						call system('ln -s ' . l:lsp_path . ' ~/bin')
+					endif
+				endif
+			endif
+
+		endfor
+	endif
 endfunction
 
 function! lsp_settings#install_server(ft, command) abort
@@ -392,7 +374,6 @@ function! s:vim_lsp_install_server(ft, command, bang) abort
     call lsp_settings#utils#error('Invalid server name')
     return
   endif
-  call lsp#stop_server(a:command)
   let l:entry = s:vim_lsp_installer(a:ft, a:command)
   if empty(l:entry)
     call lsp_settings#utils#error('Server not found')
@@ -510,11 +491,11 @@ function! s:vim_lsp_load_or_suggest(ft) abort
   augroup END
   exe 'augroup!' l:group_name
 
-  if has('patch-8.1.1113')
-    command! -nargs=1 LspRegisterServer autocmd User lsp_setup ++once call lsp_settings#register_server(<args>)
-  else
-    command! -nargs=1 LspRegisterServer autocmd User lsp_setup call lsp_settings#register_server(<args>)
-  endif
+  " if has('patch-8.1.1113')
+  "   command! -nargs=1 LspRegisterServer autocmd User lsp_setup ++once call lsp_settings#register_server(<args>)
+  " else
+  "   command! -nargs=1 LspRegisterServer autocmd User lsp_setup call lsp_settings#register_server(<args>)
+  " endif
 
   let l:default = get(g:, 'lsp_settings_filetype_' . a:ft, '')
 
@@ -573,7 +554,7 @@ function! s:vim_lsp_load_or_suggest(ft) abort
     endif
   endfor
 
-  delcommand LspRegisterServer
+  " delcommand LspRegisterServer
 
   if l:disabled == 0 && l:found ==# 0
     if a:ft !=# '_' && get(g:, 'lsp_settings_enable_suggestions', 1) == 1
@@ -616,14 +597,11 @@ function! lsp_settings#init() abort
     endfor
   endfor
 
+
   for l:ft in keys(s:settings)
     if has_key(g:, 'lsp_settings_allowlist') && index(g:lsp_settings_allowlist, l:ft) == -1 || empty(s:settings[l:ft])
       continue
     endif
-    exe 'augroup' lsp_settings#utils#group_name(l:ft)
-      autocmd!
-      exe 'autocmd FileType' l:ft 'call' printf("s:vim_lsp_load_or_suggest('%s')", l:ft)
-    augroup END
   endfor
   augroup vim_lsp_suggest
     autocmd!
